@@ -1,6 +1,6 @@
 # Robust Satisficing Ensemble (RSE)
 
-Official implementation and experimental code for **Robust Satisficing Ensemble (RSE)**, a **NeurIPS 2026 Spotlight** paper.
+Official implementation and experimental code for RSE**, a **NeurIPS 2026 Spotlight** paper.
 
 This repository contains the code used to reproduce our experiments on distribution shifts across **SST-5, TREC, CivilComments, HuffPost, and Selective Copying**.
 
