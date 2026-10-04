@@ -85,4 +85,4 @@ python ensemble_diversity_sst5.py
 python ensemble_diversity_trec.py
 ```
 
-These experiments evaluate sensitivity to changes in the available ensemble members, including model removal, subset selection, and weak or correlated predictors.
+These experiments assess the robustness of RSE to variations in ensemble composition, including model removal, reduced model pools, and the inclusion of weak or correlated predictors.
