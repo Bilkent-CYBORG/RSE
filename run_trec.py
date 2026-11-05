@@ -20,7 +20,8 @@ from helpers import (
     create_label_shifted_dataset,
     calculate_kl_divergence,
 )
-
+import pandas as pd
+from scipy.stats import ttest_rel
 if __name__ == "__main__":
 
     
@@ -815,72 +816,118 @@ fig.savefig('trec_dro_vs_rse_concept_final.pdf',
 print("✓ Saved: trec_dro_vs_rse_concept_final.pdf")
 plt.show()
 
-import pandas as pd
-from scipy.stats import ttest_rel
-
-print("\n" + "="*100)
-print("=== SIGNIFICANCE TESTING (Paired t-test vs RSE on TREC) ===")
-print("="*100)
 
 
-hero_method = 'RSE'
-baselines = ['DRO', 'IRM', 'SRM', 'KL-RS', 'ERM'] 
+print("\n" + "=" * 100)
+print("=== SIGNIFICANCE TESTING (Split-level paired t-test vs RSE) ===")
+print("=" * 100)
 
-shift_type = shift_types_to_test[0] 
+hero_method = "RSE"
+baselines = ["DRO", "IRM", "SRM", "KL-RS", "ERM"]
+methods = [hero_method] + baselines
+
+EXPECTED_RUNS = 20
+EXPECTED_TRIALS = 5
+
+if len(all_experiment_results) != EXPECTED_RUNS:
+    raise ValueError(
+        f"Expected {EXPECTED_RUNS} runs, "
+        f"found {len(all_experiment_results)}."
+    )
+
+shift_type = shift_types_to_test[0]
 sig_results = []
+pvalue_results = []
 
 for magnitude in magnitudes_to_test:
-   
-    hero_accs = []
-    baseline_accs_dict = {b: [] for b in baselines}
+    key = (shift_type, magnitude)
+    split_accs = {method: [] for method in methods}
 
-    for exp_res in all_experiment_results:
-        
-        hero_trials = exp_res[hero_method][(shift_type, magnitude)]
-        hero_accs.extend([t['accuracy'] for t in hero_trials])
+    for run_idx, exp_res in enumerate(all_experiment_results, start=1):
+        for method in methods:
+            # .get() avoids creating missing entries in defaultdicts.
+            trials = exp_res.get(method, {}).get(key)
 
-       
-        for b in baselines:
-            b_trials = exp_res[b][(shift_type, magnitude)]
-            baseline_accs_dict[b].extend([t['accuracy'] for t in b_trials])
+            if trials is None or len(trials) != EXPECTED_TRIALS:
+                count = 0 if trials is None else len(trials)
+                raise ValueError(
+                    f"Run {run_idx}, method {method}, shift {magnitude}: "
+                    f"expected {EXPECTED_TRIALS} trials, found {count}. "
+                    "Check that shift keys match across runs."
+                )
 
-    hero_accs = np.array(hero_accs)
-    hero_mean = np.mean(hero_accs) * 100
-    hero_std = np.std(hero_accs) * 100
+            values = np.asarray(
+                [trial["accuracy"] for trial in trials],
+                dtype=float
+            )
+
+            if not np.all(np.isfinite(values)):
+                raise ValueError(
+                    f"Non-finite accuracy in run {run_idx}, "
+                    f"method {method}, shift {magnitude}."
+                )
+
+            # One observation per split: average its five test draws.
+            split_accs[method].append(values.mean())
+
+    hero_accs = np.asarray(split_accs[hero_method])
+    hero_mean = hero_accs.mean() * 100
+    hero_std = hero_accs.std(ddof=1) * 100
 
     row_data = {
-        'Shift': f"{magnitude:.2f}",
-        f'{hero_method} (Ours)': f"{hero_mean:.1f} ± {hero_std:.1f}"
+        "Shift": f"{magnitude:.2f}",
+        f"{hero_method} (Ours)": f"{hero_mean:.1f} ± {hero_std:.1f}"
     }
+    pvalue_row = {"Shift": f"{magnitude:.2f}"}
 
-    for b in baselines:
-        b_accs = np.array(baseline_accs_dict[b])
-        b_mean = np.mean(b_accs) * 100
-        b_std = np.std(b_accs) * 100
+    for baseline in baselines:
+        baseline_accs = np.asarray(split_accs[baseline])
+        baseline_mean = baseline_accs.mean() * 100
+        baseline_std = baseline_accs.std(ddof=1) * 100
 
-       
-        if np.all(hero_accs == b_accs):
-            p_val = 1.0 
+        if np.array_equal(hero_accs, baseline_accs):
+            p_val = 1.0
         else:
-            _, p_val = ttest_rel(hero_accs, b_accs)
+            _, p_val = ttest_rel(
+                hero_accs,
+                baseline_accs,
+                alternative="two-sided"
+            )
+
+        if not np.isfinite(p_val):
+            raise ValueError(
+                f"Undefined p-value for {baseline}, shift {magnitude}."
+            )
 
         if p_val < 0.01:
-            sig_marker = "**" 
+            sig_marker = "**"
         elif p_val < 0.05:
-            sig_marker = "*"  
+            sig_marker = "*"
         else:
-            sig_marker = ""      
+            sig_marker = ""
 
-        row_data[b] = f"{b_mean:.1f} ± {b_std:.1f}{sig_marker}"
+        row_data[baseline] = (
+            f"{baseline_mean:.1f} ± {baseline_std:.1f}{sig_marker}"
+        )
+        pvalue_row[baseline] = float(p_val)
 
     sig_results.append(row_data)
+    pvalue_results.append(pvalue_row)
 
-df_sig = pd.DataFrame(sig_results)
+cols = ["Shift", f"{hero_method} (Ours)"] + baselines
+df_sig = pd.DataFrame(sig_results)[cols]
+df_pvalues = pd.DataFrame(pvalue_results)[["Shift"] + baselines]
 
-
-cols = ['Shift', f'{hero_method} (Ours)'] + baselines
-df_sig = df_sig[cols]
-
-print("\nSignificance Table (Accuracies % ± Std Dev, * p<0.05, ** p<0.01 vs RSE):")
+print(
+    "\nAccuracy (%) ± sample SD across 20 split averages "
+    "(five test draws per split)."
+)
+print(
+    "Two-sided paired t-tests; unadjusted p-values. "
+    "* p<0.05, ** p<0.01 vs RSE."
+)
 print(df_sig.to_string(index=False))
-print("="*100 + "\n")
+
+print("\nUnadjusted p-values:")
+print(df_pvalues.to_string(index=False, float_format=lambda p: f"{p:.6g}"))
+print("=" * 100 + "\n")
